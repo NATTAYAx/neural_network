@@ -1,111 +1,116 @@
-procedure TradingBot
+Procedure TradingBot
 
-Initialize inputs array with size [4]
-Load Model Weights using LoadModelWeights()
-repeat // Main trading loop
-for shift = 0 to 4 do
-Check if enough data exists for current shift
-if Bars(Symbol(), PERIOD_M1) < shift + 1 then
-Print "Not enough data for shift ", shift
-continue
-end if
-Prepare data for neural network input
-PrepareData(inputs, shift)
-Print "Testing with shift ", shift, ": ", inputs
-Trade execution only for the most recent data
-if shift == 0 then
-ExecuteTrade with ForwardPropagation(inputs)
-end if
-end for
-until trading session ends
-end procedure
+Initialize:
+Set inputs array with size [4].
+Load model weights using LoadModelWeights().
+Main Trading Loop:
+Repeat until the trading session ends:
+For each shift from 0 to 4:
+Check Data Availability:
+If Bars(Symbol(), PERIOD_M1) < shift + 1, print "Not enough data for shift" and skip to the next iteration.
+Prepare Data:
+Call PrepareData(inputs, shift) to prepare data for neural network input.
+Print "Testing with shift", shift, ": ", inputs.
+Trade Execution:
+If shift == 0 (most recent data), execute ExecuteTrade using ForwardPropagation(inputs) as the prediction.
+End TradingBot
 
 --------------------------------------------------------
 Procedure PrepareData(inputs[], shift)
+
+Retrieve market data:
 closePrice ← iClose(Symbol(), PERIOD_M1, shift)
 high ← iHigh(Symbol(), PERIOD_M1, shift)
 low ← iLow(Symbol(), PERIOD_M1, shift)
 volume ← iVolume(Symbol(), PERIOD_M1, shift)
-Normalize data for neural network
+Normalize data for neural network input:
 inputs[0] ← closePrice / 1000.0
 inputs[1] ← high / 1000.0
 inputs[2] ← low / 1000.0
 inputs[3] ← volume / 10000.0
-Print "Inputs prepared with shift ", shift, ": ", inputs
-end procedure
+Print "Inputs prepared with shift", shift, ": ", inputs.
+End PrepareData
 
 --------------------------------------------------------
 Procedure LoadModelWeights
-Initialize model weights and biases from external files
+
+Initialize model weights and biases from external files:
 LoadWeightsInputHidden()
 LoadWeightsHiddenOutput()
 LoadBiasesFromFile("biases_hidden.csv", biases_hidden, 5)
 LoadBiasesFromFile("bias_output.csv", bias_output, 1)
 Print "Model weights successfully loaded."
-end procedure
+End LoadModelWeights
 
 --------------------------------------------------------
 Procedure ExecuteTrade(prediction)
 
-Retrieve Market Data (fastMA, slowMA, rsi)
+Retrieve Market Data:
+
+RetrieveMarketData(fastMA, slowMA, rsi)
 askPrice, bidPrice ← SymbolInfoDouble(MySymbol, SYMBOL_ASK), SymbolInfoDouble(MySymbol, SYMBOL_BID)
-Define Conditions:
+Define Trading Conditions:
+
 uptrend ← (fastMA >= slowMA - MAThreshold)
 downtrend ← (fastMA < slowMA + MAThreshold)
 buyAllowed ← (rsi < RSIOverSold + 5)
 sellAllowed ← (rsi > RSIOverbought - 5)
 existingBuy ← (PositionSelect(MySymbol) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
 existingSell ← (PositionSelect(MySymbol) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
-Print "Checking trade conditions..."
-Print "Prediction: ", prediction, " NeuralThreshold: ", NeuralThreshold
-Print "Fast MA: ", fastMA, ", Slow MA: ", slowMA
-Print "RSI: ", rsi, ", Uptrend: ", uptrend, ", Buy Allowed: ", buyAllowed, ", Existing Buy: ", existingBuy
-Execute Buy Trade
-if prediction > NeuralThreshold && uptrend && buyAllowed && !existingBuy then
-Print "Attempting Buy Order - Conditions Met"
+Log Trade Conditions:
+
+Print "Checking trade conditions...", along with the values of prediction, fastMA, slowMA, rsi, uptrend, downtrend, buyAllowed, sellAllowed, existingBuy, and existingSell.
+Trade Execution Logic:
+
+Open Buy Position:
+
+If prediction > NeuralThreshold and uptrend and buyAllowed and not existingBuy:
+Print "Attempting Buy Order - Conditions Met".
 success ← trade.Buy(LotSize, MySymbol, askPrice, StopLoss, TakeProfit)
-if success then
+If success:
 trade.PositionModify(ticket, 0, askPrice - TrailingStopPoints * Point())
-Print "Buy Order Placed with Trailing Stop"
-else
-Print "Error placing Buy Order: ", GetLastError()
-end if
-end if
-Execute Sell Trade
-if prediction < (1 - NeuralThreshold) && downtrend && sellAllowed && !existingSell then
-Print "Attempting Sell Order - Conditions Met"
+Print "Buy Order Placed with Trailing Stop".
+Else:
+Print "Error placing Buy Order:", GetLastError().
+Open Sell Position:
+
+If prediction < (1 - NeuralThreshold) and downtrend and sellAllowed and not existingSell:
+Print "Attempting Sell Order - Conditions Met".
 success ← trade.Sell(LotSize, MySymbol, bidPrice, StopLoss, TakeProfit)
-if success then
+If success:
 trade.PositionModify(ticket, 0, bidPrice + TrailingStopPoints * Point())
-Print "Sell Order Placed with Trailing Stop"
-else
-Print "Error placing Sell Order: ", GetLastError()
-end if
-end if
-Close Buy Position if Sell Conditions Met
-if existingBuy && (prediction < (1 - NeuralThreshold) && downtrend && sellAllowed) then
+Print "Sell Order Placed with Trailing Stop".
+Else:
+Print "Error placing Sell Order:", GetLastError().
+Position Closing Logic:
+
+Close Buy Position if Sell Conditions Met:
+
+If existingBuy and prediction < (1 - NeuralThreshold) and downtrend and sellAllowed:
 trade.PositionClose(existingBuyTicket)
-Print "Closed Buy Position"
-end if
-Close Sell Position if Buy Conditions Met
-if existingSell && (prediction > NeuralThreshold && uptrend && buyAllowed) then
+Print "Closed Buy Position".
+Close Sell Position if Buy Conditions Met:
+
+If existingSell and prediction > NeuralThreshold and uptrend and buyAllowed:
 trade.PositionClose(existingSellTicket)
-Print "Closed Sell Position"
-end if
-end procedure
+Print "Closed Sell Position".
+End ExecuteTrade
 
 --------------------------------------------------------
 Procedure ForwardPropagation(inputs[])
-hidden_layer[5] ← [0, 0, 0, 0, 0]
-for each i in hidden layer
-   hidden_layer[i] ← biases_hidden[i]
-   for each j in input layer
-      hidden_layer[i] += inputs[j] * weights_input_hidden[j][i]
-   hidden_layer[i] ← Sigmoid(hidden_layer[i])
-end for
+
+Initialize hidden_layer[5] ← [0, 0, 0, 0, 0].
+Calculate hidden layer values:
+For each i in hidden layer:
+hidden_layer[i] ← biases_hidden[i]
+For each j in input layer:
+hidden_layer[i] += inputs[j] * weights_input_hidden[j][i]
+hidden_layer[i] ← Sigmoid(hidden_layer[i])
+Calculate output:
 output ← bias_output[0]
-for each i in hidden layer
-   output += hidden_layer[i] * weights_hidden_output[i][0]
+For each i in hidden layer:
+output += hidden_layer[i] * weights_hidden_output[i][0]
 output ← Sigmoid(output)
-Print("Final output after activation: ", output)
-return output
+Print "Final output after activation:", output
+Return output
+End ForwardPropagation
