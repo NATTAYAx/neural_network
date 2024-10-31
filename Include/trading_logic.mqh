@@ -17,6 +17,12 @@ input double NeuralThreshold = 0.65;  // Lowered threshold for testing
 input double MAThreshold = 1.0;       // Increased threshold to further loosen conditions
 input double TrailingStopPoints = 50;
 
+// Profit-taking targets
+double initialProfitTarget = 2.5; // Increased from 2.0
+double partialProfitLevel = 2.0;  // Take partial profit at 2.0
+double trailingProfitLevel = 1.5; // Start trailing stop at 1.5 profit
+double finalProfitTarget = 4.0;   // Ultimate target if the trend continues
+
 // Function to get a neural network prediction
 double NeuralNetworkPrediction(double &inputs[]) {
     double prediction = ForwardPropagation(inputs); // Ensure ForwardPropagation is implemented
@@ -32,7 +38,18 @@ void RetrieveMarketData(double &fastMA, double &slowMA, double &rsi) {
     Print("Market Data - FastMA: ", fastMA, ", SlowMA: ", slowMA, ", RSI: ", rsi);  // Log market data
 }
 
-// Adjusted ExecuteTrade function to include Sell logic
+// Function to count active buy positions
+int CountBuyPositions() {
+    int count = 0;
+    for (int i = PositionsTotal() - 1; i >= 0; i--) {
+        if (PositionGetSymbol(i) == MySymbol && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// Adjusted ExecuteTrade function to include Sell logic and multiple buys
 void ExecuteTrade(double prediction) {
     double askPrice, bidPrice;
 
@@ -47,25 +64,24 @@ void ExecuteTrade(double prediction) {
     double fastMA, slowMA, rsi;
     RetrieveMarketData(fastMA, slowMA, rsi);
 
-    // Define conditions for buy and sell
-    bool uptrend = (fastMA >= slowMA - MAThreshold);  // Uptrend with relaxed tolerance
-    bool downtrend = (fastMA <= slowMA + MAThreshold); // Downtrend with tolerance
-    bool buyAllowed = (rsi < RSIOverSold + 5);        // Buy condition based on RSI
-    bool sellAllowed = (rsi > RSIOverbought - 5);     // Sell condition based on RSI
+    // Adjusted uptrend and downtrend conditions
+    bool uptrend = (fastMA >= slowMA - MAThreshold);
+    bool downtrend = (fastMA < slowMA + MAThreshold); // Add a downtrend condition
+    bool buyAllowed = (rsi < RSIOverSold + 5);        // Buy condition
+    bool sellAllowed = (rsi > RSIOverbought - 5);     // Sell condition
 
-    bool existingBuy = PositionSelect(MySymbol) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
-    bool existingSell = PositionSelect(MySymbol) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL;
+    int buyCount = CountBuyPositions();  // Count current buy positions
 
-    // Detailed logging for trade conditions
+    // Log trade conditions
     Print("Checking trade conditions...");
     Print("Prediction: ", prediction, " NeuralThreshold: ", NeuralThreshold);
     Print("Fast MA: ", fastMA, ", Slow MA: ", slowMA);
     Print("RSI: ", rsi, ", Uptrend: ", uptrend, ", Downtrend: ", downtrend);
     Print("Buy Allowed: ", buyAllowed, ", Sell Allowed: ", sellAllowed);
-    Print("Existing Buy: ", existingBuy, ", Existing Sell: ", existingSell);
+    Print("Current Buy Positions: ", buyCount);
 
-    // Buy condition
-    if (prediction > NeuralThreshold && uptrend && buyAllowed && !existingBuy) { 
+    // Buy logic - allow up to 3 buy positions
+    if (prediction > NeuralThreshold && uptrend && buyAllowed && buyCount < 3) { 
         Print("Attempting Buy Order - Conditions Met");
         bool success = trade.Buy(LotSize, MySymbol, askPrice, askPrice - StopLossPoints * Point(), askPrice + TakeProfitPoints * Point());
         
@@ -81,34 +97,49 @@ void ExecuteTrade(double prediction) {
             Print("Error placing Buy Order: ", GetLastError());
         }
     }
-    // Sell condition
-    else if (prediction < (1 - NeuralThreshold) && downtrend && sellAllowed && !existingSell) { 
-        Print("Attempting Sell Order - Conditions Met");
-        bool success = trade.Sell(LotSize, MySymbol, bidPrice, bidPrice + StopLossPoints * Point(), bidPrice - TakeProfitPoints * Point());
-        
-        if (success) {
+
+    // Sell logic - check and manage open buy positions
+    for (int i = PositionsTotal() - 1; i >= 0; i--) {
+        if (PositionGetSymbol(i) == MySymbol && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
             ulong ticket = PositionGetInteger(POSITION_TICKET);
-            if (ticket > 0) {
-                trade.PositionModify(ticket, 0, bidPrice + TrailingStopPoints * Point());
-                Print("Sell Order Placed with Trailing Stop");
-            } else {
-                Print("Error retrieving position ticket after Sell order: ", GetLastError());
+            double currentProfit = PositionGetDouble(POSITION_PROFIT);
+
+            // Partial profit-taking condition
+            if (currentProfit >= partialProfitLevel) {
+                Print("Partial profit target reached. Closing half of Buy Position.");
+                bool success = trade.PositionClosePartial(ticket, LotSize / 2);
+                if (success) {
+                    Print("Partial profit taken.");
+                }
             }
-        } else {
-            Print("Error placing Sell Order: ", GetLastError());
+
+            // Trailing stop activation condition
+            if (currentProfit >= trailingProfitLevel) {
+                trade.PositionModify(ticket, 0, PositionGetDouble(POSITION_PRICE_OPEN) + TrailingStopPoints * Point());
+                Print("Trailing stop activated to secure profit.");
+            }
+
+            // Final profit target
+            if (currentProfit >= finalProfitTarget) {
+                Print("Final profit target reached. Closing Buy Position.");
+                bool success = trade.PositionClose(ticket);
+                if (success) {
+                    Print("Buy Position Closed Successfully at final target.");
+                } else {
+                    Print("Error closing Buy Position at final target: ", GetLastError());
+                }
+            }
+
+            // Sell condition to exit existing buy positions
+            if (prediction < NeuralThreshold && downtrend && sellAllowed) {
+                Print("Sell conditions met, closing Buy Position.");
+                bool success = trade.PositionClose(ticket);
+                if (success) {
+                    Print("Buy Position Closed due to Sell Conditions.");
+                } else {
+                    Print("Error closing Buy Position: ", GetLastError());
+                }
+            }
         }
-    }
-    // Close Buy Position when Sell conditions met
-    else if (existingBuy && sellAllowed) {
-        Print("Closing Buy Position as Sell conditions are met");
-        trade.PositionClose(PositionGetInteger(POSITION_TICKET));
-    }
-    // Close Sell Position when Buy conditions met
-    else if (existingSell && buyAllowed) {
-        Print("Closing Sell Position as Buy conditions are met");
-        trade.PositionClose(PositionGetInteger(POSITION_TICKET));
-    }
-    else {
-        Print("No trade executed - Conditions not met.");
     }
 }
